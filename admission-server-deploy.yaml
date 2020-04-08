@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: admission-webhook
+  labels:
+    run: admission-server
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      run: admission-server
+  revisionHistoryLimit: 10
+  template:
+    metadata:
+      labels:
+        run: admission-server
+    spec:
+      containers:
+        - name: admission-server
+          image: admission-server:test
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8999
+          volumeMounts:
+          - name: webhook-secret
+            mountPath: /etc/webhook/certs.d
+            readOnly: true
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext: {}
+      volumes:
+      - name: webhook-secret
+        secret:
+          secretName: webhook-server
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: admission-service
+spec:
+  selector:
+    run: admission-server
+  ports:
+    - protocol: TCP
+      port: 8999
+      targetPort: 8999

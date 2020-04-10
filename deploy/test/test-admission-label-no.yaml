@@ -1,0 +1,10 @@
+kind: Pod
+apiVersion: v1
+metadata:
+  namespace: test-admisssion
+  name: nginx-app
+spec:
+  containers:
+    - name: nginx
+      image: nginx
+  restartPolicy: "Always"

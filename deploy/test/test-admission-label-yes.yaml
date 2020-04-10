@@ -1,0 +1,12 @@
+kind: Pod
+apiVersion: v1
+metadata:
+  namespace: test-admisssion
+  name: nginx-app-test
+  labels:
+    run: test-admission
+spec:
+  containers:
+    - name: nginx
+      image: nginx
+  restartPolicy: "Always"

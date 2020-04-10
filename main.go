@@ -24,10 +24,17 @@ var (
 	defaulter = runtime.ObjectDefaulter(runtimeScheme)
 )
 
+type patchType struct {
+	Op string `json:"op"`
+	Path string `json:"path"`
+	Value interface{} `json:"value,omitempty"`
+}
+
 func main() {
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/validate", validationHandler)
+	mux.HandleFunc("/validate", admissionHandler)
+	mux.HandleFunc("/mutate", admissionHandler)
 
 	httpServer := &http.Server{
 		Addr: ":8999",
@@ -39,7 +46,7 @@ func main() {
 	}
 }
 
-func validationHandler(w http.ResponseWriter, r *http.Request) {
+func admissionHandler(w http.ResponseWriter, r *http.Request) {
 
 	var body []byte
 	if r.Body != nil {
@@ -70,9 +77,13 @@ func validationHandler(w http.ResponseWriter, r *http.Request) {
 				Message: err.Error(),
 			},
 		}
+	} else {
+		if r.URL.Path == "/validate" {
+			admissionResponse = validateFunc(&ar)
+		} else if r.URL.Path == "/mutate" {
+			admissionResponse = mutateFunc(&ar)
+		}
 	}
-
-	admissionResponse = validateFunc(&ar)
 
 	admissionReview := v1beta1.AdmissionReview{}
 	if admissionResponse != nil {
@@ -138,5 +149,83 @@ func validateFunc(ar *v1beta1.AdmissionReview) *v1beta1.AdmissionResponse {
 	return &v1beta1.AdmissionResponse{
 		Allowed:          allow,
 		Result:           result,
+	}
+}
+
+func mutateFunc(ar *v1beta1.AdmissionReview) *v1beta1.AdmissionResponse {
+	req := ar.Request
+
+	if req.Kind.Kind != "Pod" {
+		glog.Infof("Skipping validation for %s/%s due to policy check", req.Namespace, req.Name)
+		return &v1beta1.AdmissionResponse{
+			Allowed: true,
+		}
+	}
+
+	var pod corev1.Pod
+	if err := json.Unmarshal(req.Object.Raw, &pod); err != nil {
+		glog.Errorf("Could not unmarshal raw object: %v", err)
+		return &v1beta1.AdmissionResponse{
+			Result: &metav1.Status{
+				Message: err.Error(),
+			},
+		}
+	}
+
+	podName, podNS, podMeta := pod.Name, pod.Namespace, pod.ObjectMeta
+	availableLabels := pod.Labels
+
+	fmt.Println(podName, podNS, podMeta)
+	if podNS != "test-admisssion" {
+		return &v1beta1.AdmissionResponse{
+			Allowed: true,
+		}
+	}
+
+	values := make(map[string]string)
+	requiredLabels := []string{"test-admission", "admission-webhook"}
+	for _, key := range requiredLabels {
+		if _, ok := availableLabels[key]; !ok {
+			values[key] = "yes"
+		}
+	}
+
+	if len(values) == 0 {
+		return &v1beta1.AdmissionResponse{
+			Allowed: true,
+		}
+	} else {
+		var patchData []patchType
+
+		// 因为admissionResponse仅仅支持jsonpatch更新策略，所以更新的字段或者
+		// 内容应该是其对应的所有内容而不仅仅是新增的内容。
+		for key, value := range availableLabels {
+			values[key] = value
+		}
+
+		patchData = append(patchData, patchType{
+			Op:    "add",
+			Path:  "/metadata/labels",
+			Value: values,
+		})
+		patchBytes, err := json.Marshal(patchData)
+		if err != nil {
+			glog.Errorf("Could not marshal patch data: %v", err)
+			return &v1beta1.AdmissionResponse{
+				Result: &metav1.Status{
+					Message: err.Error(),
+				},
+			}
+		}
+
+		glog.Infof("Patch data: %v", string(patchBytes))
+		return &v1beta1.AdmissionResponse{
+			Allowed:          true,
+			Patch:            patchBytes,
+			PatchType:        func() *v1beta1.PatchType {
+				pt := v1beta1.PatchTypeJSONPatch
+				return &pt
+			}(),
+		}
 	}
 }
